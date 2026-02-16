@@ -1,0 +1,14 @@
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  # API isteklerini atlat
+  RewriteRule ^api/ - [L]
+
+  # Fiziksel dosya veya klasör varsa dokunma
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+
+  # Tüm istekleri index.html'e yönlendir
+  RewriteRule ^ index.html [L]
+</IfModule>

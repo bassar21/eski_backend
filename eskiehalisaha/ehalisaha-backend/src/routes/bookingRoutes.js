@@ -1,45 +1,90 @@
-const express = require('express');
-const BookingController = require('../controllers/bookingController');
-const { authMiddleware, roleMiddleware } = require('../middleware/auth');
+const db = require('../config/database');
 
-const router = express.Router();
+class BookingController {
+  
+  // Müsaitlik Durumu (Dolu Saatleri Getir)
+  static async getAvailability(req, res) {
+    try {
+      const { pitchId, date } = req.query; // Query params olarak alabilir
 
-router.get('/availability/:pitchId/:date', BookingController.getAvailability);
+      // Flutter tarafı tarih formatını YYYY-MM-DD string olarak gönderiyor
+      // Dolu saatleri çekiyoruz
+      const result = await db.query(
+        `SELECT rezHour FROM Reservations 
+         WHERE pitchId = @p1 
+         AND CAST(rezDate AS DATE) = CAST(@p2 AS DATE) 
+         AND status = 1`,
+        [pitchId, date]
+      );
 
-router.post('/lock', authMiddleware, BookingController.lockSlot);
-router.post('/extend-lock', authMiddleware, BookingController.extendLock);
-router.post('/release-lock', authMiddleware, BookingController.releaseLock);
+      // Sadece saat listesi dönüyoruz: [18, 19, 20]
+      const bookedHours = result.rows.map(row => row.rezHour);
 
-router.post('/', authMiddleware, BookingController.createBooking);
-router.get('/my-bookings', authMiddleware, BookingController.getUserBookings);
-router.post('/cancel/:bookingId', authMiddleware, BookingController.cancelBooking);
+      res.json({ success: true, data: bookedHours });
+    } catch (error) {
+      console.error('Get availability error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
 
-router.get(
-  '/facility/:facilityId',
-  authMiddleware,
-  roleMiddleware('SahaSahibi', 'Admin'),
-  BookingController.getFacilityBookings
-);
+  // Yeni Rezervasyon Oluştur
+  static async createBooking(req, res) {
+      try {
+          // Flutter 'rezervasyonYap' metodundan gelen veri
+          const { pitchId, userId, rezDate, rezHour, note } = req.body;
+          const user_id = userId || req.user.id; // Token'dan veya body'den
 
-router.post(
-  '/manual',
-  authMiddleware,
-  roleMiddleware('SahaSahibi', 'Admin'),
-  BookingController.createManualBooking
-);
+          // Çakışma Kontrolü
+          const check = await db.query(
+              `SELECT id FROM Reservations 
+               WHERE pitchId = @p1 AND rezDate = @p2 AND rezHour = @p3 AND status = 1`,
+              [pitchId, rezDate, rezHour]
+          );
 
-router.patch(
-  '/:bookingId/status',
-  authMiddleware,
-  roleMiddleware('SahaSahibi', 'Admin'),
-  BookingController.updateBookingStatus
-);
+          if (check.rows.length > 0) {
+              return res.status(409).json({ error: 'Bu saat maalesef dolu.' });
+          }
 
-router.delete(
-  '/:bookingId',
-  authMiddleware,
-  roleMiddleware('SahaSahibi', 'Admin'),
-  BookingController.deleteBooking
-);
+          // Rezervasyon Kaydı
+          const result = await db.query(
+              `INSERT INTO Reservations (pitchId, userId, rezDate, rezHour, note, status, createdAt)
+               OUTPUT INSERTED.*
+               VALUES (@p1, @p2, @p3, @p4, @p5, 1, GETDATE())`,
+              [pitchId, user_id, rezDate, rezHour, note || '']
+          );
 
-module.exports = router;
+          res.status(201).json({ success: true, data: result.rows[0] });
+      } catch (error) {
+          console.error('Create booking error:', error);
+          res.status(500).json({ error: error.message });
+      }
+  }
+
+  // Rezervasyon Silme
+  static async deleteBooking(req, res) {
+    try {
+      const { bookingId } = req.params;
+      
+      // MSSQL Delete
+      await db.query('DELETE FROM Reservations WHERE id = @p1', [bookingId]);
+
+      res.json({ success: true, message: 'Rezervasyon silindi' });
+    } catch (error) {
+      console.error('Delete booking error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+  
+  // Rezervasyonlarım
+  static async getMyBookings(req, res) {
+      try {
+          const userId = req.user.id;
+          const result = await db.query('SELECT * FROM Reservations WHERE userId = @p1 ORDER BY rezDate DESC', [userId]);
+          res.json({ success: true, data: result.rows });
+      } catch (error) {
+           res.status(500).json({ error: error.message });
+      }
+  }
+}
+
+module.exports = BookingController;
